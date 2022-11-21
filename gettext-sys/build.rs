@@ -61,8 +61,14 @@ fn posix_path(path: &Path) -> String {
 }
 
 fn check_dependencies(required_programs: Vec<&str>) {
+    let mut cmd = "sh";
+
+    if env::var("HOST").unwrap().contains("windows") {
+        cmd = "powershell.exe";
+    }
+
     let command = |x| {
-        let status = Command::new("sh")
+        let status = Command::new(cmd)
             .arg("-c")
             .arg(format!("command -v {}", x))
             .status()
@@ -161,6 +167,7 @@ fn main() {
 
     let host = env::var("HOST").unwrap();
     let src = env::current_dir().unwrap();
+    println!("{}", src.as_path().to_str().unwrap());
     let build_dir = TempDir::new().unwrap();
     let build_dir = build_dir.path();
 
@@ -180,26 +187,43 @@ fn main() {
         // Avoid undefined reference to `__imp_xmlFree'
         cflags.push("-DLIBXML_STATIC");
     }
-
-    let mut cmd = Command::new("tar");
-    cmd.current_dir(&build_dir.join("gettext"))
-        .arg("xJf")
+    if env::var("HOST").unwrap().contains("windows") {
+        let mut cmd = Command::new("powershell.exe");
+        cmd.current_dir(&build_dir.join("gettext"))
+        .arg(&src.join("scripts/tar.ps1"))
         .arg(&src.join("gettext-0.21.tar.xz"))
-        .arg("--strip-components")
-        .arg("1");
-    if host.contains("windows") {
-        // tar confuses local path with a remote resource because of ':'
-        cmd.arg("--force-local");
-    }
-    run(&mut cmd, "tar");
+        .arg(&build_dir.join("gettext"));
+        run(&mut cmd, "tar");
 
-    let mut cmd = Command::new("sh");
+        let mut cmd = Command::new("tar");
+        cmd.current_dir(&build_dir.join("gettext"))
+        .arg("-xkf")
+        .arg(&build_dir.join("gettext").join("gettext-0.21.tar"))
+        .arg("-C")
+        .arg(&build_dir.join("gettext"));
+        run(&mut cmd, "tar");
+    } else {
+
+        let mut cmd = Command::new("tar");
+        cmd.current_dir(&build_dir.join("gettext"))
+            .arg("xJf")
+            .arg(&src.join("gettext-0.21.tar.xz"))
+            .arg("--strip-components")
+            .arg("1");
+        run(&mut cmd, "tar");
+    // if host.contains("windows") {
+    //     // tar confuses local path with a remote resource because of ':'
+    //     cmd.arg("--force-local");
+    // }
+    }
+
+    let mut cmd = Command::new(&build_dir.join("gettext").join("configure"));
+
     cmd.env("CC", compiler.path())
         .env("CFLAGS", cflags)
-        .env("LD", &which("ld").unwrap())
+        //.env("LD", &which("ld").unwrap())
         .env("VERBOSE", "1")
-        .current_dir(&build_dir.join("build"))
-        .arg(&posix_path(&build_dir.join("gettext").join("configure")));
+        .current_dir(&build_dir.join("build"));
 
     cmd.arg("--without-emacs");
     cmd.arg("--disable-java");
@@ -238,7 +262,9 @@ fn main() {
             cmd.arg(format!("--host={}", target));
         }
     }
-    run(&mut cmd, "sh");
+
+    run(&mut cmd, "configure");
+
     run(
         make()
             .arg(&format!("-j{}", env::var("NUM_JOBS").unwrap()))
